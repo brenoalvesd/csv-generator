@@ -1,41 +1,79 @@
 import { Injectable } from '@nestjs/common';
 import { SheetsData } from '@sheets/interfaces/sheets-data.interface';
+import {
+  ColumnDefinitionDto,
+  ColumnType,
+  CurrencyCode,
+} from '@sheets/dto/column-definition.dto';
 
 @Injectable()
 export class DataFormatterService {
   /**
-   * Formata um valor individual baseado no seu tipo detectado
+   * Formata todos os dados da planilha usando definições de coluna
    */
-  formatValue(value: string): string {
-    if (!value || value.trim() === '') {
-      return '';
-    }
+  formatSheetData(
+    data: SheetsData,
+    columnDefinitions?: ColumnDefinitionDto[],
+  ): SheetsData {
+    // Se não houver definições, cria definições padrão (STRING) para todos os headers
+    const definitions =
+      columnDefinitions ||
+      data.headers.map((header) => ({
+        name: header,
+        type: ColumnType.STRING,
+      }));
 
-    const trimmedValue = value.trim();
+    // Mapa rápido de definição por índice da coluna
+    // Nota: Assumimos que a ordem das definições bate com a ordem das colunas no 'data'
+    // Se o sheets.service já filtrou as colunas, então definitions[i] corresponde a data.rows[...][i]
+    
+    const formattedRows = data.rows.map((row) =>
+      row.map((cell, index) => {
+        const def = definitions[index];
+        // Se não tiver definição para essa coluna (ex: colunas extras), usa STRING
+        const type = def?.type || ColumnType.STRING;
+        const currency = (def as ColumnDefinitionDto)?.currency;
 
-    // Tenta formatar como data
-    const dateFormatted = this.formatDate(trimmedValue);
-    if (dateFormatted !== trimmedValue) {
-      return dateFormatted;
-    }
+        return this.formatValueByType(cell, type, currency);
+      }),
+    );
 
-    // Tenta formatar como moeda
-    const currencyFormatted = this.formatCurrency(trimmedValue);
-    if (currencyFormatted !== trimmedValue) {
-      return currencyFormatted;
-    }
-
-    // Tenta formatar como número
-    const numberFormatted = this.formatNumber(trimmedValue);
-    if (numberFormatted !== trimmedValue) {
-      return numberFormatted;
-    }
-
-    return trimmedValue;
+    return {
+      ...data,
+      rows: formattedRows,
+    };
   }
 
   /**
-   * Formata datas para formato padrão (YYYY-MM-DD ou DD/MM/YYYY)
+   * Formata um valor baseado no seu tipo explícito
+   */
+  private formatValueByType(
+    value: string,
+    type: ColumnType,
+    currency?: CurrencyCode,
+  ): string {
+    if (!value && value !== '0') return ''; // Mantém células vazias como vazias, mas '0' é valor
+
+    const trimmedValue = value.trim();
+    if (trimmedValue === '') return '';
+
+    switch (type) {
+      case ColumnType.CURRENCY:
+        return this.formatCurrency(trimmedValue, currency);
+      case ColumnType.TELEPHONE:
+        return this.formatTelephone(trimmedValue);
+      case ColumnType.EMAIL:
+        return this.formatEmail(trimmedValue);
+      case ColumnType.DATE:
+        return this.formatDate(trimmedValue);
+      case ColumnType.STRING:
+      default:
+        return trimmedValue;
+    }
+  }
+
+  /**
+   * Formata datas para formato padrão DD/MM/YYYY
    */
   formatDate(value: string): string {
     // Padrões comuns de data
@@ -56,7 +94,7 @@ export class DataFormatterService {
       return `${match[3]}/${match[2]}/${match[1]}`;
     }
 
-    // DD/MM/YYYY ou DD-MM-YYYY (já está no formato correto)
+    // DD/MM/YYYY ou DD-MM-YYYY (já está no formato correto, apenas normaliza separador)
     match = value.match(ddMMyyyyPattern) || value.match(ddMMyyyyDashPattern);
     if (match) {
       return value.replace(/-/g, '/'); // Converte hífen para barra
@@ -75,80 +113,56 @@ export class DataFormatterService {
   }
 
   /**
-   * Formata valores monetários
+   * Formata valores monetários usando Intl
    */
-  formatCurrency(value: string): string {
-    // Remove espaços e caracteres comuns de formatação
-    const cleaned = value.replace(/\s/g, '').replace(/[R$]/g, '');
+  formatCurrency(value: string, currencyCode: CurrencyCode = CurrencyCode.BRL): string {
+    // Limpa o valor para extrair número
+    // Remove tudo que não é dígito, ponto, vírgula ou sinal de menos
+    // Cuidado: 1.000,00 (PT-BR) vs 1,000.00 (EN-US)
+    
+    let numericValue: number;
+    const cleanValue = value.replace(/\s/g, '').replace(/[^\d.,-]/g, '');
 
-    // Padrões de moeda
-    const currencyPatterns = [
-      /^(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)$/, // 1.234,56 ou 1.234,56
-      /^(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)$/, // 1,234.56 (formato US)
-      /^(\d+([.,]\d{2})?)$/, // 1234,56 ou 1234.56
-    ];
-
-    for (const pattern of currencyPatterns) {
-      const match = cleaned.match(pattern);
-      if (match) {
-        // Normaliza para formato brasileiro: R$ 1.234,56
-        let number = cleaned.replace(/\./g, '').replace(',', '.');
-        const numValue = parseFloat(number);
-        if (!isNaN(numValue)) {
-          return `R$ ${numValue.toLocaleString('pt-BR', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}`;
-        }
-      }
+    // Heurística simples para detectar formato:
+    // Se tem vírgula no final (...,XX), assume decimal PT-BR
+    if (cleanValue.match(/,\d{1,2}$/)) {
+        // Formato brasileiro: 1.234,56 -> 1234.56
+        numericValue = parseFloat(cleanValue.replace(/\./g, '').replace(',', '.'));
+    } else {
+        // Formato internacional ou sem decimal claro: 1,234.56 -> 1234.56
+        // Ou 1234 -> 1234
+        numericValue = parseFloat(cleanValue.replace(/,/g, ''));
     }
 
-    return value;
+    if (isNaN(numericValue)) return value;
+
+    try {
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: currencyCode,
+      }).format(numericValue);
+    } catch (e) {
+      return value;
+    }
   }
 
   /**
-   * Formata números (decimais, separadores)
+   * Formata e valida emails
    */
-  formatNumber(value: string): string {
-    // Remove espaços
-    const cleaned = value.replace(/\s/g, '');
-
-    // Padrões numéricos
-    const numberPatterns = [
-      /^-?\d{1,3}(?:\.\d{3})*(?:,\d+)?$/, // 1.234,56
-      /^-?\d{1,3}(?:,\d{3})*(?:\.\d+)?$/, // 1,234.56
-      /^-?\d+([.,]\d+)?$/, // 1234,56 ou 1234.56
-    ];
-
-    for (const pattern of numberPatterns) {
-      const match = cleaned.match(pattern);
-      if (match) {
-        // Normaliza para formato brasileiro: 1.234,56
-        let number = cleaned.replace(/\./g, '').replace(',', '.');
-        const numValue = parseFloat(number);
-        if (!isNaN(numValue)) {
-          return numValue.toLocaleString('pt-BR', {
-            minimumFractionDigits: numValue % 1 === 0 ? 0 : 2,
-            maximumFractionDigits: 2,
-          });
-        }
-      }
-    }
-
-    return value;
+  formatEmail(value: string): string {
+    return value.toLowerCase().trim();
   }
 
   /**
-   * Formata todos os dados da planilha
+   * Formata telefones (mantém apenas números ou formata se necessário)
+   * O requisito diz: "formatar os dados apenas para string padrão"
+   * Entendo como: retornar o número limpo ou como string simples, sem tentar adivinhar máscara.
    */
-  formatSheetData(data: SheetsData): SheetsData {
-    const formattedRows = data.rows.map((row) =>
-      row.map((cell) => this.formatValue(cell)),
-    );
-
-    return {
-      ...data,
-      rows: formattedRows,
-    };
+  formatTelephone(value: string): string {
+    // Retorna o valor original trimado, garantindo que seja string
+    // Ou podemos limpar caracteres estranhos se desejar apenas números:
+    // return value.replace(/[^\d+]/g, ''); 
+    // Mas o requisito diz "string padrão", então vamos apenas limpar espaços.
+    return value.trim();
   }
 }

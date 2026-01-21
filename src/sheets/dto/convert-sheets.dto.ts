@@ -1,4 +1,5 @@
 import { IsString, IsUrl, IsOptional, IsArray } from 'class-validator';
+import { ColumnDefinitionDto } from './column-definition.dto';
 
 export class ConvertSheetsDto {
   @IsUrl({}, { message: 'URL must be a valid Google Sheets URL' })
@@ -15,6 +16,5 @@ export class ConvertSheetsDto {
 
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
-  columns?: string[];
+  columns?: (string | ColumnDefinitionDto)[];
 }
