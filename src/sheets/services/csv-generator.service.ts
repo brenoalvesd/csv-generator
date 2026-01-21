@@ -7,7 +7,7 @@ export class CsvGeneratorService {
   /**
    * Gera um arquivo CSV a partir dos dados da planilha
    */
-  generateCsv(data: SheetsData): string {
+  generateCsv(data: SheetsData, delimiter: string = ','): string {
     if (!data.headers || data.headers.length === 0) {
       throw new Error('Cannot generate CSV: headers are missing');
     }
@@ -18,6 +18,7 @@ export class CsvGeneratorService {
         id: `col${index}`,
         title: header || `Column ${index + 1}`,
       })),
+      fieldDelimiter: delimiter,
     });
 
     // Converte as linhas em objetos

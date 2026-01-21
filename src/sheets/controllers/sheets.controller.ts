@@ -23,6 +23,11 @@ export class SheetsController {
     try {
       const { csv, filename } = await this.sheetsService.convertToCsv(
         convertDto.url,
+        {
+          sheetId: convertDto.sheetId,
+          columns: convertDto.columns,
+          delimiter: convertDto.delimiter,
+        },
       );
 
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');

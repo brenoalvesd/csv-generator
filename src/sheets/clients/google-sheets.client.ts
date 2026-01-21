@@ -43,16 +43,17 @@ export class GoogleSheetsClient {
   /**
    * Busca dados de uma planilha pública do Google Sheets usando exportação CSV
    */
-  async fetchSpreadsheet(url: string): Promise<SheetsData> {
+  async fetchSpreadsheet(url: string, sheetId?: string): Promise<SheetsData> {
     if (!this.isValidGoogleSheetsUrl(url)) {
       throw new BadRequestException('Invalid Google Sheets URL.');
     }
 
     const spreadsheetId = this.extractSpreadsheetId(url);
+    const gid = sheetId ? `&gid=${sheetId}` : '&gid=0';
 
     try {
       // URL de exportação CSV do Google Sheets (planilhas públicas)
-      const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=0`;
+      const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv${gid}`;
       
       const response = await axios.get(exportUrl, {
         responseType: 'text',
